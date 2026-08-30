@@ -33,7 +33,8 @@ SECTION "Header", ROM0[$0104]
 ; ---------------------------------------------------------------------------
 SECTION "Main", ROM0[$0150]
 Start:
-    ; TODO - disable LCD, load tiles/palette, enable LCD, init game state
+    ; TODO: turn LCD off, load ShipTile into VRAM, set up OAM entry 0 and
+    ; rOBP0, turn LCD back on (worksheet 6)
 
     ; Allow the VBlank interrupt to fire, and let the CPU actually respond
     ; to it—this is what lets `halt` in .loop wake up once per frame.
@@ -41,44 +42,88 @@ Start:
     ld [rIE], a
     ei
 
-    ;; starting yPos
-    ; wYPos = LANDER_Y_ST.0 (8.8 fixed-point: low byte = fraction, high byte
-    ; = whole pixels)
+    ; wYPos/wXPos = starting position (8.8 fixed-point: low byte = fraction,
+    ; high byte = whole pixels). Only the high byte is meaningful at boot.
     ld a, 0
     ld [wYPos], a
     ld a, LANDER_Y_ST
     ld [wYPos+1], a
 
-    ;; starting yVel
-    ; wYVel = 0—ship isn't moving yet at boot
+    ld a, 0
+    ld [wXPos], a
+    ld a, LANDER_X_ST
+    ld [wXPos+1], a
+
+    ; wYVel/wXVel = 0; ship isn't moving yet at boot.
     ld a, 0
     ld [wYVel], a
     ld [wYVel+1], a
+    ld [wXVel], a
+    ld [wXVel+1], a
 
-    ;; set acc of grav
-    ; wYAcc = ACC_OF_GRAV—constant downward pull applied every frame
-    ; by UpdatePhysics (Requirement 1: falls under gravity)
+    ; wYAcc = ACC_OF_GRAV; constant downward pull applied every frame by
+    ; UpdatePhysics (Requirement 1: falls under gravity).
     ld a, LOW(ACC_OF_GRAV)
     ld [wYAcc], a
     ld a, HIGH(ACC_OF_GRAV)
     ld [wYAcc+1], a
 
+    ; wXAcc = 0; no horizontal pull until UpdateAcceleration sets it from
+    ; input, once per frame.
+    ld a, 0
+    ld [wXAcc], a
+    ld [wXAcc+1], a
+
 .loop:
     ; Sleep until the next VBlank interrupt, then advance the simulation
-    ; by exactly one frame.
+    ; by exactly one frame, in order: read this frame's input, let it
+    ; decide this frame's horizontal acceleration, then integrate physics.
     halt
-    ; TODO: call ReadInput and an acceleration-update routine here once
-    ; input should start affecting wXAcc/wYAcc (worksheet 5)
+    call ReadInput
+    call UpdateAcceleration
     call UpdatePhysics
     nop
     jr .loop
 
 
 ; ---------------------------------------------------------------------------
+; UpdateAcceleration
+; Sets wXAcc from this frame's wLeft/wRight flags (Requirement 2: input
+; changes acceleration, never velocity or position directly). Left wins
+; if both are somehow held at once, since it's checked first and returns
+; immediately.
+; ---------------------------------------------------------------------------
+UpdateAcceleration:
+	ld a, [wLeft]
+	cp a, 1
+	jr nz, .Right
+	ld a, LOW(-ACC_MOVE)
+	ld [wXAcc], a
+	ld a, HIGH(-ACC_MOVE)
+	ld [wXAcc+1], a
+	ret
+.Right:
+	ld a, [wRight]
+	cp a, 1
+	jr nz, .End
+	ld a, LOW(ACC_MOVE)
+	ld [wXAcc], a
+	ld a, HIGH(ACC_MOVE)
+	ld [wXAcc+1], a
+	ret
+.End:
+	; Neither held: no horizontal thrust this frame. wXVel is untouched,
+	; so the ship keeps drifting at whatever speed it already had.
+	ld a, 0
+	ld [wXAcc], a
+	ld [wXAcc+1], a
+	ret
+
+; ---------------------------------------------------------------------------
 ; ReadInput
 ; Polls the D-pad and records which of Left/Right are currently held into
-; wLeft/wRight (1 = held, 0 = not held). Doesn't touch acceleration itself
-;—that's a separate routine's job (Requirement 2 keeps input handling and
+; wLeft/wRight (1 = held, 0 = not held). Doesn't touch acceleration itself—
+; that's a separate routine's job (Requirement 2 keeps input handling and
 ; physics decoupled).
 ; ---------------------------------------------------------------------------
 ReadInput:
@@ -129,7 +174,8 @@ ReadInput:
 ; loaded into a pair, added, then stored back out.
 ; ---------------------------------------------------------------------------
 UpdatePhysics:
-	;; add acceleration to velocity
+	;; Y-PHYSICS
+	; add acceleration to velocity
 	ld a, [wYVel]   ; low byte: fraction of pixel
 	ld l, a
 	ld a, [wYVel+1] ; high byte: whole pixel
@@ -142,13 +188,13 @@ UpdatePhysics:
 
 	add hl, bc
 
-	;; save back into velocity
+	; save back into velocity
 	ld a, l
 	ld [wYVel], a
 	ld a, h
 	ld [wYVel+1], a
 
-	;; add velocity to position
+	; add velocity to position
 	ld a, [wYPos]
 	ld l, a
 	ld a, [wYPos+1]
@@ -161,12 +207,68 @@ UpdatePhysics:
 
 	add hl, bc
 
-	;; save back into position
+	; save back into position
 	ld a, l
 	ld [wYPos], a
 	ld a, h
 	ld [wYPos+1], a
 
+	;; X-PHYSICS ;;
+	ld a, [wXVel]
+	ld l, a
+	ld a, [wXVel+1]
+	ld h, a
+
+	ld a, [wXAcc]
+	ld c, a
+	ld a, [wXAcc+1]
+	ld b, a
+
+	add hl, bc
+
+	ld a, l
+	ld [wXVel], a
+	ld a, h
+	ld [wXVel+1], a
+
+	; add velocity to position
+	ld a, [wXPos]
+	ld l, a
+	ld a, [wXPos+1]
+	ld h, a
+
+	ld a, [wXVel]
+	ld c, a
+	ld a, [wXVel+1]
+	ld b, a
+
+	add hl, bc
+
+	ld a, l
+	ld [wXPos], a
+	ld a, h
+	ld [wXPos+1], a
+
+	ret
+
+; ---------------------------------------------------------------------------
+; Ship graphics (ROM)
+; A single solid-color 8x8 tile (2bpp), a rounded capsule with two landing
+; legs. Placeholder art, swap out whenever. Each row is two identical
+; bytes since every drawn pixel uses color index 3 (both bitplanes set).
+; ---------------------------------------------------------------------------
+SECTION "Ship Graphics", ROM0
+
+ShipTile:
+	db $18, $18 ; ...##...
+	db $3C, $3C ; ..####..
+	db $3C, $3C ; ..####..
+	db $7E, $7E ; .######.
+	db $FF, $FF ; ########
+	db $7E, $7E ; .######.
+	db $42, $42 ; .#....#.
+	db $81, $81 ; #......#
+ShipTileEnd:
 
 ; ---------------------------------------------------------------------------
 ; Ship state (WRAM)
@@ -178,9 +280,16 @@ wYPos: dw
 wYVel: dw
 wYAcc: dw
 
+; lander—X-axis, 8.8 fixed-point
+wXPos: dw
+wXVel: dw
+wXAcc: dw
+
 ; pad state—1 = held, 0 = not held, refreshed once per frame by ReadInput
 wLeft: db
 wRight: db
 
 DEF ACC_OF_GRAV EQU $0008 ; gravity: 1/32 px/frame², applied to wYAcc
+DEF ACC_MOVE    EQU $0020 ; horizontal acceleration
 DEF LANDER_Y_ST EQU 0     ; ship's starting Y position (whole pixels)
+DEF LANDER_X_ST EQU 88

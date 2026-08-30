@@ -7,7 +7,7 @@ all: $(ROM)
 
 $(ROM): $(SRC) src/hardware.inc
 	rgbasm -I src -o build/main.o $(SRC)
-	rgblink -o $(ROM) build/main.o
+	rgblink -n build/lunarlander.sym -o $(ROM) build/main.o
 	rgbfix -v -p 0xFF -t "LUNARLANDER" $(ROM)
 
 run: $(ROM)
