@@ -9,7 +9,17 @@
     <a href="https://zed.dev/"><img src="https://img.shields.io/badge/IDE-Zed-084CCF"></img></a>
 </p>
 
-A Game Boy ROM, hand-written in SM83 assembly (RGBDS), recreating the **CS-UY 3113: Intro to Game Programming** (NYU Tandon) Lunar Lander assignment—normally built in C++/raylib—on real hardware constraints instead: no floats, no engine, fixed-point physics, and manual sprite/collision code.
+A tiny Game Boy ROM written in SM83 assembly (RGBDS), recreating the **CS-UY 3113: Intro to Game Programming** (NYU Tandon) Lunar Lander assignment—normally built in C++/raylib—on real hardware constraints instead: no floats, no engine, fixed-point physics, and manual sprite/collision code.
+
+<p align=center>
+    <img src="assets/current.gif"></img>
+</p>
+
+<p align=center>
+    <sub>
+        Current Progress.
+    </sub>
+</p>
 
 ---
 

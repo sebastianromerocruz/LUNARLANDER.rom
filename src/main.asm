@@ -42,6 +42,15 @@ Start:
     ld [rIE], a
     ei
 
+    ; Turn LCD off
+    ld a, 0
+    ld [rLCDC], a
+
+    ld de, ShipTile
+    ld hl, $8000
+    ld bc, ShipTileEnd - ShipTile
+    call Memcpy
+
     ; wYPos/wXPos = starting position (8.8 fixed-point: low byte = fraction,
     ; high byte = whole pixels). Only the high byte is meaningful at boot.
     ld a, 0
@@ -74,6 +83,18 @@ Start:
     ld [wXAcc], a
     ld [wXAcc+1], a
 
+    ld d, 0 ; initialize OAM with 0s
+	ld hl, OAM_START ; start of OAM
+	ld bc, OAM_SIZE
+	call SetOAM
+
+	; Turn the LCD on
+	ld a, LCDC_ON | LCDC_OBJ_ON
+	ld [rLCDC], a
+
+	ld a, %11100100
+	ld [rOBP0], a
+
 .loop:
     ; Sleep until the next VBlank interrupt, then advance the simulation
     ; by exactly one frame, in order: read this frame's input, let it
@@ -82,9 +103,47 @@ Start:
     call ReadInput
     call UpdateAcceleration
     call UpdatePhysics
+    call UpdateSprite
     nop
     jr .loop
 
+UpdateSprite:
+	ld hl, OAM_START
+	ld a, [wYPos+1]
+	add a, OAM_Y_OFF
+	ld [hli], a
+
+	ld a, [wXPos+1]
+	add a, OAM_X_OFF
+	ld [hli], a
+	ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Set OAM
+;; - Copies bc bytes from d-register to [hl], one byte at a time.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    SetOAM:
+	ld a, d
+	ld [hli], a
+	dec bc
+	ld a, b
+	or a, c
+	jr nz, SetOAM
+	ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Memcpy
+;; - Copies bc bytes from de-register to hl-register, one byte at a time.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+Memcpy:
+	ld a, [de]
+	ld [hli], a
+	inc de
+	dec bc
+	ld a, b
+	or a, c
+	jr nz, Memcpy
+	ret
 
 ; ---------------------------------------------------------------------------
 ; UpdateAcceleration
@@ -289,7 +348,13 @@ wXAcc: dw
 wLeft: db
 wRight: db
 
-DEF ACC_OF_GRAV EQU $0008 ; gravity: 1/32 px/frame², applied to wYAcc
-DEF ACC_MOVE    EQU $0020 ; horizontal acceleration
+DEF ACC_OF_GRAV EQU $0001 ; gravity: 1/256 px/frame², applied to wYAcc
+DEF ACC_MOVE    EQU $0001 ; horizontal acceleration
 DEF LANDER_Y_ST EQU 0     ; ship's starting Y position (whole pixels)
 DEF LANDER_X_ST EQU 88
+
+; OAM related
+DEF OAM_START      EQU $FE00
+DEF BALL_OAM       EQU $FE0C
+DEF OAM_Y_OFF	   EQU 16
+DEF OAM_X_OFF	   EQU 8
