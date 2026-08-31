@@ -34,7 +34,7 @@ SECTION "Header", ROM0[$0104]
 SECTION "Main", ROM0[$0150]
 Start:
     ; TODO: turn LCD off, load ShipTile into VRAM, set up OAM entry 0 and
-    ; rOBP0, turn LCD back on (worksheet 6)
+    ; rOBP0, turn LCD back on
 
     ; Allow the VBlank interrupt to fire, and let the CPU actually respond
     ; to it—this is what lets `halt` in .loop wake up once per frame.
@@ -42,7 +42,7 @@ Start:
     ld [rIE], a
     ei
 
-    ; Turn LCD off
+    ; Turn LCD off before touching VRAM tile data.
     ld a, 0
     ld [rLCDC], a
 
@@ -63,37 +63,40 @@ Start:
     ld a, LANDER_X_ST
     ld [wXPos+1], a
 
-    ; wYVel/wXVel = 0; ship isn't moving yet at boot.
+    ; wYVel/wXVel = 0—ship isn't moving yet at boot.
     ld a, 0
     ld [wYVel], a
     ld [wYVel+1], a
     ld [wXVel], a
     ld [wXVel+1], a
 
-    ; wYAcc = ACC_OF_GRAV; constant downward pull applied every frame by
+    ; wYAcc = ACC_OF_GRAV—constant downward pull applied every frame by
     ; UpdatePhysics (Requirement 1: falls under gravity).
     ld a, LOW(ACC_OF_GRAV)
     ld [wYAcc], a
     ld a, HIGH(ACC_OF_GRAV)
     ld [wYAcc+1], a
 
-    ; wXAcc = 0; no horizontal pull until UpdateAcceleration sets it from
+    ; wXAcc = 0—no horizontal pull until UpdateAcceleration sets it from
     ; input, once per frame.
     ld a, 0
     ld [wXAcc], a
     ld [wXAcc+1], a
 
-    ld d, 0 ; initialize OAM with 0s
-	ld hl, OAM_START ; start of OAM
-	ld bc, OAM_SIZE
-	call SetOAM
+    ; Zero out all of OAM, which also clears entry 0's tile-index/attribute
+    ; bytes to 0—matching ShipTile, loaded into tile slot 0 above.
+    ld d, 0
+    ld hl, OAM_START
+    ld bc, OAM_SIZE
+    call SetOAM
 
-	; Turn the LCD on
-	ld a, LCDC_ON | LCDC_OBJ_ON
-	ld [rLCDC], a
+    ; Turn the LCD back on, objects only (no BG layer yet).
+    ld a, LCDC_ON | LCDC_OBJ_ON
+    ld [rLCDC], a
 
-	ld a, %11100100
-	ld [rOBP0], a
+    ; Sprite palette: identity mapping (00 -> white ... 11 -> black).
+    ld a, %11100100
+    ld [rOBP0], a
 
 .loop:
     ; Sleep until the next VBlank interrupt, then advance the simulation
@@ -107,43 +110,54 @@ Start:
     nop
     jr .loop
 
+
+; ---------------------------------------------------------------------------
+; UpdateSprite
+; Mirrors the physics position onto OAM entry 0 every frame. Only the
+; high (whole-pixel) byte of wYPos/wXPos is meaningful on screen; the
+; OAM Y/X offsets (+16/+8) are a hardware quirk so sprites can be
+; partially scrolled off-screen.
+; ---------------------------------------------------------------------------
 UpdateSprite:
-	ld hl, OAM_START
-	ld a, [wYPos+1]
-	add a, OAM_Y_OFF
-	ld [hli], a
+    ld hl, OAM_START
+    ld a, [wYPos+1]
+    add a, OAM_Y_OFF
+    ld [hli], a
 
-	ld a, [wXPos+1]
-	add a, OAM_X_OFF
-	ld [hli], a
-	ret
+    ld a, [wXPos+1]
+    add a, OAM_X_OFF
+    ld [hli], a
+    ret
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Set OAM
-;; - Copies bc bytes from d-register to [hl], one byte at a time.
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-    SetOAM:
-	ld a, d
-	ld [hli], a
-	dec bc
-	ld a, b
-	or a, c
-	jr nz, SetOAM
-	ret
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Memcpy
-;; - Copies bc bytes from de-register to hl-register, one byte at a time.
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; ---------------------------------------------------------------------------
+; SetOAM
+; Copies bc bytes of value d into [hl], one byte at a time.
+; ---------------------------------------------------------------------------
+SetOAM:
+    ld a, d
+    ld [hli], a
+    dec bc
+    ld a, b
+    or a, c
+    jr nz, SetOAM
+    ret
+
+
+; ---------------------------------------------------------------------------
+; Memcpy
+; Copies bc bytes from [de] into [hl], one byte at a time.
+; ---------------------------------------------------------------------------
 Memcpy:
-	ld a, [de]
-	ld [hli], a
-	inc de
-	dec bc
-	ld a, b
-	or a, c
-	jr nz, Memcpy
-	ret
+    ld a, [de]
+    ld [hli], a
+    inc de
+    dec bc
+    ld a, b
+    or a, c
+    jr nz, Memcpy
+    ret
+
 
 ; ---------------------------------------------------------------------------
 ; UpdateAcceleration
@@ -153,180 +167,185 @@ Memcpy:
 ; immediately.
 ; ---------------------------------------------------------------------------
 UpdateAcceleration:
-	ld a, [wLeft]
-	cp a, 1
-	jr nz, .Right
-	ld a, LOW(-ACC_MOVE)
-	ld [wXAcc], a
-	ld a, HIGH(-ACC_MOVE)
-	ld [wXAcc+1], a
-	ret
+    ld a, [wLeft]
+    cp a, 1
+    jr nz, .Right
+    ld a, LOW(-ACC_MOVE)
+    ld [wXAcc], a
+    ld a, HIGH(-ACC_MOVE)
+    ld [wXAcc+1], a
+    ret
 .Right:
-	ld a, [wRight]
-	cp a, 1
-	jr nz, .End
-	ld a, LOW(ACC_MOVE)
-	ld [wXAcc], a
-	ld a, HIGH(ACC_MOVE)
-	ld [wXAcc+1], a
-	ret
+    ld a, [wRight]
+    cp a, 1
+    jr nz, .End
+    ld a, LOW(ACC_MOVE)
+    ld [wXAcc], a
+    ld a, HIGH(ACC_MOVE)
+    ld [wXAcc+1], a
+    ret
 .End:
-	; Neither held: no horizontal thrust this frame. wXVel is untouched,
-	; so the ship keeps drifting at whatever speed it already had.
-	ld a, 0
-	ld [wXAcc], a
-	ld [wXAcc+1], a
-	ret
+    ; Neither held: no horizontal thrust this frame. wXVel is untouched,
+    ; so the ship keeps drifting at whatever speed it already had.
+    ld a, 0
+    ld [wXAcc], a
+    ld [wXAcc+1], a
+    ret
+
 
 ; ---------------------------------------------------------------------------
 ; ReadInput
 ; Polls the D-pad and records which of Left/Right are currently held into
 ; wLeft/wRight (1 = held, 0 = not held). Doesn't touch acceleration itself—
-; that's a separate routine's job (Requirement 2 keeps input handling and
-; physics decoupled).
+; that's a separate routine's job (Requirement 2 keeps input handling
+; and physics decoupled).
 ; ---------------------------------------------------------------------------
 ReadInput:
-	; Default both flags to "not held"; only overwritten below if a
-	; direction bit actually reads as pressed.
-	ld a, 0
-	ld [wLeft], a
-	ld [wRight], a
+    ; Default both flags to "not held"; only overwritten below if a
+    ; direction bit actually reads as pressed.
+    ld a, 0
+    ld [wLeft], a
+    ld [wRight], a
 
-	; Select the Control Pad (D-pad) group on rJOYP.
-	ld a, JOYP_GET_CTRL_PAD
-	ld [rJOYP], a
+    ; Select the Control Pad (D-pad) group on rJOYP.
+    ld a, JOYP_GET_CTRL_PAD
+    ld [rJOYP], a
 
-	; Throwaway reads—let the signal settle after switching groups.
-	ld a, [rJOYP]
-	ld a, [rJOYP]
+    ; Throwaway reads—let the signal settle after switching groups.
+    ld a, [rJOYP]
+    ld a, [rJOYP]
 
-	; Real read. Stash the raw byte in b so both the Left and Right
-	; tests below can reuse it without re-reading hardware.
-	ld a, [rJOYP]
-	ld b, a
+    ; Real read. Stash the raw byte in b so both the Left and Right
+    ; tests below can reuse it without re-reading hardware.
+    ld a, [rJOYP]
+    ld b, a
 
-	; Active-low: a bit reads 0 when its button is held. AND-ing against
-	; a single bit mask leaves the zero flag set exactly when that bit
-	; was 0, i.e. pressed.
-	and a, JOYP_LEFT ; sets the zero flag
-	jr nz, .right
-	ld a, 1
-	ld [wLeft], a
+    ; Active-low: a bit reads 0 when its button is held. AND-ing against
+    ; a single bit mask leaves the zero flag set exactly when that bit
+    ; was 0, i.e. pressed.
+    and a, JOYP_LEFT ; sets the zero flag
+    jr nz, .right
+    ld a, 1
+    ld [wLeft], a
 .right:
-	ld a, b
+    ld a, b
 
-	and a, JOYP_RIGHT
-	jr nz, .end
-	ld a, 1
-	ld [wRight], a
+    and a, JOYP_RIGHT
+    jr nz, .end
+    ld a, 1
+    ld [wRight], a
 .end:
-	ret
+    ret
 
 
 ; ---------------------------------------------------------------------------
 ; UpdatePhysics
-; Advances the Y-axis simulation by one frame:
-;   wYVel += wYAcc
-;   wYPos += wYVel
-; All three variables are 16-bit 8.8 fixed-point. The SM83 only adds
+; Advances the full simulation by one frame, on both axes:
+;   wYVel += wYAcc   wXVel += wXAcc
+;   wYPos += wYVel   wXPos += wXVel
+; All six variables are 16-bit 8.8 fixed-point. The SM83 only adds
 ; register pairs, not memory operands directly, so each addition is
 ; loaded into a pair, added, then stored back out.
 ; ---------------------------------------------------------------------------
 UpdatePhysics:
-	;; Y-PHYSICS
-	; add acceleration to velocity
-	ld a, [wYVel]   ; low byte: fraction of pixel
-	ld l, a
-	ld a, [wYVel+1] ; high byte: whole pixel
-	ld h, a
+    ; --- Y-axis ---
+    ; add acceleration to velocity
+    ld a, [wYVel]   ; low byte: fraction of pixel
+    ld l, a
+    ld a, [wYVel+1] ; high byte: whole pixel
+    ld h, a
 
-	ld a, [wYAcc]   ; low byte: fraction of pixel
-	ld c, a
-	ld a, [wYAcc+1] ; high byte: whole pixel
-	ld b, a
+    ld a, [wYAcc]   ; low byte: fraction of pixel
+    ld c, a
+    ld a, [wYAcc+1] ; high byte: whole pixel
+    ld b, a
 
-	add hl, bc
+    add hl, bc
 
-	; save back into velocity
-	ld a, l
-	ld [wYVel], a
-	ld a, h
-	ld [wYVel+1], a
+    ; save back into velocity
+    ld a, l
+    ld [wYVel], a
+    ld a, h
+    ld [wYVel+1], a
 
-	; add velocity to position
-	ld a, [wYPos]
-	ld l, a
-	ld a, [wYPos+1]
-	ld h, a
+    ; add velocity to position
+    ld a, [wYPos]
+    ld l, a
+    ld a, [wYPos+1]
+    ld h, a
 
-	ld a, [wYVel]
-	ld c, a
-	ld a, [wYVel+1]
-	ld b, a
+    ld a, [wYVel]
+    ld c, a
+    ld a, [wYVel+1]
+    ld b, a
 
-	add hl, bc
+    add hl, bc
 
-	; save back into position
-	ld a, l
-	ld [wYPos], a
-	ld a, h
-	ld [wYPos+1], a
+    ; save back into position
+    ld a, l
+    ld [wYPos], a
+    ld a, h
+    ld [wYPos+1], a
 
-	;; X-PHYSICS ;;
-	ld a, [wXVel]
-	ld l, a
-	ld a, [wXVel+1]
-	ld h, a
+    ; --- X-axis ---
+    ; add acceleration to velocity
+    ld a, [wXVel]
+    ld l, a
+    ld a, [wXVel+1]
+    ld h, a
 
-	ld a, [wXAcc]
-	ld c, a
-	ld a, [wXAcc+1]
-	ld b, a
+    ld a, [wXAcc]
+    ld c, a
+    ld a, [wXAcc+1]
+    ld b, a
 
-	add hl, bc
+    add hl, bc
 
-	ld a, l
-	ld [wXVel], a
-	ld a, h
-	ld [wXVel+1], a
+    ; save back into velocity
+    ld a, l
+    ld [wXVel], a
+    ld a, h
+    ld [wXVel+1], a
 
-	; add velocity to position
-	ld a, [wXPos]
-	ld l, a
-	ld a, [wXPos+1]
-	ld h, a
+    ; add velocity to position
+    ld a, [wXPos]
+    ld l, a
+    ld a, [wXPos+1]
+    ld h, a
 
-	ld a, [wXVel]
-	ld c, a
-	ld a, [wXVel+1]
-	ld b, a
+    ld a, [wXVel]
+    ld c, a
+    ld a, [wXVel+1]
+    ld b, a
 
-	add hl, bc
+    add hl, bc
 
-	ld a, l
-	ld [wXPos], a
-	ld a, h
-	ld [wXPos+1], a
+    ; save back into position
+    ld a, l
+    ld [wXPos], a
+    ld a, h
+    ld [wXPos+1], a
 
-	ret
+    ret
+
 
 ; ---------------------------------------------------------------------------
 ; Ship graphics (ROM)
 ; A single solid-color 8x8 tile (2bpp), a rounded capsule with two landing
-; legs. Placeholder art, swap out whenever. Each row is two identical
+; legs. Placeholder art—swap out whenever. Each row is two identical
 ; bytes since every drawn pixel uses color index 3 (both bitplanes set).
 ; ---------------------------------------------------------------------------
 SECTION "Ship Graphics", ROM0
 
 ShipTile:
-	db $18, $18 ; ...##...
-	db $3C, $3C ; ..####..
-	db $3C, $3C ; ..####..
-	db $7E, $7E ; .######.
-	db $FF, $FF ; ########
-	db $7E, $7E ; .######.
-	db $42, $42 ; .#....#.
-	db $81, $81 ; #......#
+    db $18, $18 ; ...##...
+    db $3C, $3C ; ..####..
+    db $3C, $3C ; ..####..
+    db $7E, $7E ; .######.
+    db $FF, $FF ; ########
+    db $7E, $7E ; .######.
+    db $42, $42 ; .#....#.
+    db $81, $81 ; #......#
 ShipTileEnd:
 
 ; ---------------------------------------------------------------------------
@@ -348,13 +367,17 @@ wXAcc: dw
 wLeft: db
 wRight: db
 
-DEF ACC_OF_GRAV EQU $0001 ; gravity: 1/256 px/frame², applied to wYAcc
-DEF ACC_MOVE    EQU $0001 ; horizontal acceleration
+; ---------------------------------------------------------------------------
+; Tuning constants (8.8 fixed-point unless noted)
+; ---------------------------------------------------------------------------
+DEF ACC_OF_GRAV EQU $0001 ; gravity: 1/256 px/frame², always applied to wYAcc
+DEF ACC_MOVE    EQU $0001 ; horizontal thrust, set on wXAcc by input
 DEF LANDER_Y_ST EQU 0     ; ship's starting Y position (whole pixels)
-DEF LANDER_X_ST EQU 88
+DEF LANDER_X_ST EQU 88    ; ship's starting X position (whole pixels)
 
-; OAM related
-DEF OAM_START      EQU $FE00
-DEF BALL_OAM       EQU $FE0C
-DEF OAM_Y_OFF	   EQU 16
-DEF OAM_X_OFF	   EQU 8
+; ---------------------------------------------------------------------------
+; OAM constants
+; ---------------------------------------------------------------------------
+DEF OAM_START EQU $FE00
+DEF OAM_Y_OFF EQU 16 ; OAM Y is the sprite's top edge + 16
+DEF OAM_X_OFF EQU 8  ; OAM X is the sprite's left edge + 8
